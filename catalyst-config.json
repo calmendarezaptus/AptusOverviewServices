@@ -1,1 +1,1 @@
-{"execution":{"main":"index.js"},"deployment":{"stack":"node24","name":"aptus-overview-services","type":"advancedio"}}
+{"execution":{"main":"index.js"},"deployment":{"stack":"node24","name":"aptus_overview_services","type":"advancedio"}}
