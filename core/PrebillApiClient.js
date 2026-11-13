@@ -28,7 +28,8 @@ export default class PrebillApiClient {
         this.config = config ?? defaultConfig(organizationId, req);
     }
 
-    async request(method, path, { params = {}, data, stage = method + ' ' + path } = {}) {
+    // timeout: 30 s por omisión; las operaciones que esperan a Books (facturar) piden más.
+    async request(method, path, { params = {}, data, stage = method + ' ' + path, timeout = 30000 } = {}) {
         let connection;
         try {
             connection = await this.config.get();
@@ -46,7 +47,7 @@ export default class PrebillApiClient {
         const url = String(connection.endpoint).replace(/\/+$/, '') + '/' + path.replace(/^\/+/, '');
         try {
             // El token va en el query string: Apache no revisa headers.
-            const response = await this.http.request({ method, url, data, params: { ...params, token: connection.token }, timeout: 30000 });
+            const response = await this.http.request({ method, url, data, params: { ...params, token: connection.token }, timeout });
             if (typeof response.data !== 'object' || response.data === null) throw new Error('Respuesta no JSON.');
             return response.data;
         } catch (cause) {
