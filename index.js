@@ -38,6 +38,10 @@ app.get('/:organizationId/responsables/resolver', route('Error interno resolvien
 app.post('/:organizationId/responsables', route('Error interno guardando el responsable.', req => config(req).createResponsable(req.body), 201));
 app.delete('/:organizationId/responsables/:responsableId', route('Error interno eliminando el responsable.', req => config(req).deleteResponsable(req.params.responsableId)));
 
+// Qué abogados pueden ser responsables (Data Store de este proyecto: tabla AbogadosResponsables).
+app.get('/:organizationId/abogados-responsables', route('Error interno consultando los abogados responsables.', req => config(req).listElegibles()));
+app.patch('/:organizationId/abogados/:abogadoId/responsable', route('Error interno guardando el abogado responsable.', req => config(req).setElegible(req.params.abogadoId, req.body)));
+
 app.get('/:organizationId/impuestos', route('Error interno consultando impuestos.', req => config(req).impuestos()));
 app.get('/:organizationId/clientes/:clienteId/config', route('Error interno consultando el cliente.', req => config(req).clienteConfig(req.params.clienteId)));
 

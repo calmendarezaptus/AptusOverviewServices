@@ -1,4 +1,5 @@
 import PrebillApiClient from '../core/PrebillApiClient.js';
+import ElegibilidadService, { puedeRol, TIPOS } from './ElegibilidadService.js';
 
 // Configuración de un proyecto en ReportesSandbox: datos (PATCH /proyectos/:id), tarifas del
 // proyecto y responsables del proyecto. NO escribe en Books: crear el proyecto en Books y sincronizar
@@ -66,21 +67,24 @@ export function validateTarifa(body) {
     return payload;
 }
 
+// Responsable del proyecto: siempre un abogado marcado como responsable de ese rol. "ambos" asigna
+// facturación y cobranza a la vez (solo para responsables generales).
 export function validateResponsable(body) {
     if (!body || typeof body !== 'object' || Array.isArray(body)) throw new ConfigError('Se requiere un objeto JSON.');
-    if (!ROLES.includes(body.rol)) throw new ConfigError('rol debe ser facturacion o cobranza.');
-    if (typeof body.nombre !== 'string' || !body.nombre.trim() || body.nombre.trim().length > 120) throw new ConfigError('nombre debe ser texto de 1 a 120 caracteres.');
+    if (![...ROLES, 'ambos'].includes(body.rol)) throw new ConfigError('rol debe ser facturacion, cobranza o ambos.');
+    if (!localId(body.abogado_id)) throw new ConfigError('abogado_id debe ser el ID del abogado en Aptus (entero).');
     if (!localId(body.proyecto_id)) throw new ConfigError('proyecto_id debe ser el ID del proyecto en Aptus (entero).');
-    return { rol: body.rol, nombre: body.nombre.trim(), proyecto_id: body.proyecto_id };
+    return { rol: body.rol, abogado_id: body.abogado_id, proyecto_id: body.proyecto_id };
 }
 
 const unexpected = what => Object.assign(new ConfigError(`El servicio de Aptus devolvió ${what} con formato inesperado.`, 502), { stage: 'response', outcome_unknown: true });
 
 export default class ProyectoConfigService {
-    constructor(organizationId, { api = null, req = null } = {}) {
+    constructor(organizationId, { api = null, store = null, req = null } = {}) {
         if (!orgId(organizationId)) throw new ConfigError('Organización inválida.');
         this.organizationId = organizationId;
         this.api = api ?? new PrebillApiClient(organizationId, { req });
+        this.elegibles = new ElegibilidadService(organizationId, { store, req });
     }
 
     check(id, what) { if (!idParam(id)) throw new ConfigError(`ID de ${what} inválido.`); }
@@ -140,11 +144,49 @@ export default class ProyectoConfigService {
         return this.api.request('get', '/responsables/resolver', { params: { proyecto_id: query.proyecto_id }, stage: 'resolver_responsables' });
     }
 
-    async createResponsable(body) {
-        const payload = validateResponsable(body);
-        const data = await this.api.request('post', '/responsables', { data: payload, stage: 'create_responsable' });
-        if (!data || !Number.isInteger(data.id)) throw unexpected('un responsable');
+    async abogado(id) {
+        const data = await this.api.request('get', '/abogados/' + id, { stage: 'get_abogado' });
+        if (!data || !Number.isInteger(data.id)) throw unexpected('un abogado');
         return data;
+    }
+
+    // ── Quién puede ser responsable ──
+    listElegibles() { return this.elegibles.list(); }
+
+    async setElegible(abogadoId, body) {
+        this.check(abogadoId, 'abogado');
+        const tipo = body?.tipo;
+        if (tipo !== null && !TIPOS.includes(tipo)) throw new ConfigError('tipo debe ser facturacion, cobranza, general o null.');
+        await this.abogado(abogadoId); // 404 de ReportesSandbox si no existe
+        return this.elegibles.set(Number(abogadoId), tipo);
+    }
+
+    // Asigna al abogado con el nombre que muestra Aptus. Con "ambos" crea las dos asignaciones; la
+    // que ya existía (409) se cuenta como hecha.
+    async createResponsable(body) {
+        const { rol, abogado_id, proyecto_id } = validateResponsable(body);
+        const tipo = await this.elegibles.tipoDe(abogado_id);
+        const roles = rol === 'ambos' ? ROLES : [rol];
+        if (!tipo) throw new ConfigError('Este abogado no está marcado como responsable. Márcalo en "Abogados responsables".', 403);
+        if (!roles.every(r => puedeRol(tipo, r))) throw new ConfigError(`Este abogado solo puede ser responsable de ${tipo === 'facturacion' ? 'facturación' : 'cobranza'}.`, 403);
+        const abogado = await this.abogado(String(abogado_id));
+        if (Number(abogado.activo) === 0) throw new ConfigError('El abogado está inactivo.', 422);
+        const nombre = String(abogado.zoho_user_nombre || abogado.nombre || '').trim().slice(0, 120);
+        if (!nombre) throw unexpected('un abogado');
+        const asignados = [];
+        for (const r of roles) {
+            try {
+                const data = await this.api.request('post', '/responsables', { data: { rol: r, nombre, proyecto_id }, stage: 'create_responsable' });
+                if (!data || !Number.isInteger(data.id)) throw unexpected('un responsable');
+                asignados.push(data);
+            } catch (error) {
+                if (error.status === 409 && rol === 'ambos') continue;
+                if (asignados.length) error.message += ' (La asignación de facturación sí se guardó.)';
+                throw error;
+            }
+        }
+        if (!asignados.length) throw new ConfigError('Ese abogado ya es responsable de facturación y cobranza en este proyecto.', 409);
+        return { id: asignados[0].id, asignados };
     }
 
     // Solo se borran asignaciones de proyecto (la lista no tiene GET por id: se busca en el listado).
