@@ -1,5 +1,5 @@
 import PrebillApiClient from '../core/PrebillApiClient.js';
-import ElegibilidadService, { puedeRol, TIPOS } from './ElegibilidadService.js';
+import ElegibilidadService, { puedeRol } from './ElegibilidadService.js';
 
 // Configuración de un proyecto en ReportesSandbox: datos (PATCH /proyectos/:id), tarifas del
 // proyecto y responsables del proyecto. NO escribe en Books: crear el proyecto en Books y sincronizar
@@ -153,12 +153,6 @@ export default class ProyectoConfigService {
     // ── Quién puede ser responsable ──
     listElegibles() { return this.elegibles.list(); }
 
-    async setElegible(abogadoId, body) {
-        this.check(abogadoId, 'abogado');
-        const tipo = body?.tipo;
-        if (tipo !== null && !TIPOS.includes(tipo)) throw new ConfigError('tipo debe ser facturacion, cobranza, general o null.');
-        return this.elegibles.set(abogadoId, tipo); // 404 de ReportesSandbox si no existe
-    }
 
     // ReportesSandbox valida la marca y toma el nombre del abogado. Aquí se revisa antes para dar un
     // mensaje claro (su 403 no se reenvía tal cual) y para no escribir si no procede.

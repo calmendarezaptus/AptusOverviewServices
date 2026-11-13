@@ -1,6 +1,6 @@
 // Qué abogados pueden ser responsables y de qué: facturación, cobranza o general (ambos).
 // La marca vive en ReportesSandbox (campo `responsable` de /abogados, desde 2026-11-13); esta
-// función solo la lee y la cambia con PATCH /abogados/:id. No toca Books.
+// función solo la lee (se cambia en Configuración de abogados, aptus_settings_services). No toca Books.
 export const TIPOS = ['facturacion', 'cobranza', 'general'];
 
 export class ElegibilidadError extends Error {
@@ -26,11 +26,4 @@ export default class ElegibilidadService {
         return abogados.filter(a => Number.isInteger(a.id) && TIPOS.includes(a.responsable)).map(a => ({ abogado_id: a.id, tipo: a.responsable }));
     }
 
-    // tipo null = ya no puede ser responsable. ReportesSandbox no borra sus asignaciones existentes.
-    async set(abogadoId, tipo) {
-        if (tipo !== null && !TIPOS.includes(tipo)) throw new ElegibilidadError('tipo debe ser facturacion, cobranza, general o null.');
-        const data = await this.api.request('patch', '/abogados/' + abogadoId, { data: { responsable: tipo }, stage: 'update_abogado_responsable' });
-        if (!data || !Number.isInteger(data.id) || (data.responsable ?? null) !== tipo) throw unexpected('el abogado');
-        return { abogado_id: data.id, tipo };
-    }
 }

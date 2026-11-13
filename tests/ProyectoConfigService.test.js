@@ -79,21 +79,12 @@ test('lecturas auxiliares validan parámetros', async () => {
 // La marca vive en ReportesSandbox (campo `responsable` de /abogados).
 const ANA = { id: 3, nombre: 'Ana Ruiz QA', zoho_user_nombre: 'Carolina Litter', activo: 1, status: 'activo' };
 
-test('abogados responsables: se leen de /abogados y se cambian con PATCH', async () => {
-    const f = fixture({
-        'get /abogados': [{ ...ANA, responsable: 'cobranza' }, { id: 5, responsable: null }, { id: 6, responsable: 'general' }],
-        'patch /abogados/3': { ...ANA, responsable: 'general' },
-        'patch /abogados/5': { id: 5, responsable: null },
-    });
+test('abogados responsables: se leen de /abogados (solo lectura)', async () => {
+    const f = fixture({ 'get /abogados': [{ ...ANA, responsable: 'cobranza' }, { id: 5, responsable: null }, { id: 6, responsable: 'general' }] });
     assert.deepEqual(await f.service.listElegibles(), [{ abogado_id: 3, tipo: 'cobranza' }, { abogado_id: 6, tipo: 'general' }]);
-    assert.deepEqual(await f.service.setElegible('3', { tipo: 'general' }), { abogado_id: 3, tipo: 'general' });
-    await f.service.setElegible('5', { tipo: null });
-    assert.deepEqual(writes(f.calls).map(c => [c.path, c.opts.data]), [['/abogados/3', { responsable: 'general' }], ['/abogados/5', { responsable: null }]]);
-    for (const [id, body] of [['3', { tipo: 'socio' }], ['3', {}], ['3/x', { tipo: 'general' }]]) await assert.rejects(f.service.setElegible(id, body), e => e.status === 400);
-    assert.equal(writes(f.calls).length, 2);
-    // ReportesSandbox antiguo (sin el campo) o respuesta que no refleja el cambio → incierto
+    assert.equal(writes(f.calls).length, 0);
+    assert.equal(f.service.setElegible, undefined);
     await assert.rejects(fixture({ 'get /abogados': [{ id: 3 }] }).service.listElegibles(), e => e.status === 502);
-    await assert.rejects(fixture({ 'patch /abogados/3': { id: 3, responsable: null } }).service.setElegible('3', { tipo: 'general' }), e => e.outcome_unknown === true);
 });
 
 test('asignar responsable: revisa la marca antes de escribir y manda abogado_id', async () => {
