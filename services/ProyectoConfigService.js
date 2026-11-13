@@ -80,11 +80,11 @@ export function validateResponsable(body) {
 const unexpected = what => Object.assign(new ConfigError(`El servicio de Aptus devolvió ${what} con formato inesperado.`, 502), { stage: 'response', outcome_unknown: true });
 
 export default class ProyectoConfigService {
-    constructor(organizationId, { api = null, store = null, req = null } = {}) {
+    constructor(organizationId, { api = null, req = null } = {}) {
         if (!orgId(organizationId)) throw new ConfigError('Organización inválida.');
         this.organizationId = organizationId;
         this.api = api ?? new PrebillApiClient(organizationId, { req });
-        this.elegibles = new ElegibilidadService(organizationId, { store, req });
+        this.elegibles = new ElegibilidadService(organizationId, { api: this.api });
     }
 
     check(id, what) { if (!idParam(id)) throw new ConfigError(`ID de ${what} inválido.`); }
@@ -157,35 +157,23 @@ export default class ProyectoConfigService {
         this.check(abogadoId, 'abogado');
         const tipo = body?.tipo;
         if (tipo !== null && !TIPOS.includes(tipo)) throw new ConfigError('tipo debe ser facturacion, cobranza, general o null.');
-        await this.abogado(abogadoId); // 404 de ReportesSandbox si no existe
-        return this.elegibles.set(Number(abogadoId), tipo);
+        return this.elegibles.set(abogadoId, tipo); // 404 de ReportesSandbox si no existe
     }
 
-    // Asigna al abogado con el nombre que muestra Aptus. Con "ambos" crea las dos asignaciones; la
-    // que ya existía (409) se cuenta como hecha.
+    // ReportesSandbox valida la marca y toma el nombre del abogado. Aquí se revisa antes para dar un
+    // mensaje claro (su 403 no se reenvía tal cual) y para no escribir si no procede.
+    // Respuesta normalizada: { id, asignados: [...] } (con "ambos", las dos asignaciones).
     async createResponsable(body) {
         const { rol, abogado_id, proyecto_id } = validateResponsable(body);
-        const tipo = await this.elegibles.tipoDe(abogado_id);
-        const roles = rol === 'ambos' ? ROLES : [rol];
-        if (!tipo) throw new ConfigError('Este abogado no está marcado como responsable. Márcalo en "Abogados responsables".', 403);
-        if (!roles.every(r => puedeRol(tipo, r))) throw new ConfigError(`Este abogado solo puede ser responsable de ${tipo === 'facturacion' ? 'facturación' : 'cobranza'}.`, 403);
         const abogado = await this.abogado(String(abogado_id));
-        if (Number(abogado.activo) === 0) throw new ConfigError('El abogado está inactivo.', 422);
-        const nombre = String(abogado.zoho_user_nombre || abogado.nombre || '').trim().slice(0, 120);
-        if (!nombre) throw unexpected('un abogado');
-        const asignados = [];
-        for (const r of roles) {
-            try {
-                const data = await this.api.request('post', '/responsables', { data: { rol: r, nombre, proyecto_id }, stage: 'create_responsable' });
-                if (!data || !Number.isInteger(data.id)) throw unexpected('un responsable');
-                asignados.push(data);
-            } catch (error) {
-                if (error.status === 409 && rol === 'ambos') continue;
-                if (asignados.length) error.message += ' (La asignación de facturación sí se guardó.)';
-                throw error;
-            }
-        }
-        if (!asignados.length) throw new ConfigError('Ese abogado ya es responsable de facturación y cobranza en este proyecto.', 409);
+        const tipo = abogado.responsable ?? null;
+        if (!tipo) throw new ConfigError('Este abogado no está marcado como responsable. Márcalo en "Abogados responsables".', 403);
+        const roles = rol === 'ambos' ? ROLES : [rol];
+        if (!roles.every(r => puedeRol(tipo, r))) throw new ConfigError(`Este abogado solo puede ser responsable de ${tipo === 'facturacion' ? 'facturación' : 'cobranza'}.`, 403);
+        if (Number(abogado.activo) === 0 || (abogado.status && abogado.status !== 'activo')) throw new ConfigError('El abogado está inactivo.', 422);
+        const data = await this.api.request('post', '/responsables', { data: { rol, abogado_id, proyecto_id }, stage: 'create_responsable' });
+        const asignados = rol === 'ambos' ? data?.asignaciones : [data];
+        if (!Array.isArray(asignados) || !asignados.length || !asignados.every(a => Number.isInteger(a?.id))) throw unexpected('un responsable');
         return { id: asignados[0].id, asignados };
     }
 

@@ -76,67 +76,40 @@ test('lecturas auxiliares validan parámetros', async () => {
     await assert.rejects(service.clienteConfig('abc'), e => e.status === 400);
 });
 
-// Data Store en memoria (mismo contrato que createDataStore).
-function memoryStore(rows = []) {
-    let next = 100;
-    const ops = [];
-    return {
-        rows, ops,
-        async list(org) { return rows.filter(r => r.org === org).map(({ rowid, abogado_id, tipo }) => ({ rowid, abogado_id, tipo })); },
-        async insert(org, abogado_id, tipo) { ops.push('insert'); rows.push({ org, rowid: String(next++), abogado_id, tipo }); },
-        async update(rowid, tipo) { ops.push('update'); rows.find(r => r.rowid === rowid).tipo = tipo; },
-        async remove(rowid) { ops.push('remove'); rows.splice(rows.findIndex(r => r.rowid === rowid), 1); },
-    };
-}
-function withStore(responses, store) {
-    const f = fixture(responses);
-    f.service = new ProyectoConfigService('636939444', { api: f.service.api, store });
-    return f;
-}
-const ANA = { id: 3, nombre: 'Ana Ruiz QA', zoho_user_nombre: 'Carolina Litter', activo: 1 };
+// La marca vive en ReportesSandbox (campo `responsable` de /abogados).
+const ANA = { id: 3, nombre: 'Ana Ruiz QA', zoho_user_nombre: 'Carolina Litter', activo: 1, status: 'activo' };
 
-test('abogados responsables: marcar, cambiar y quitar; valida el abogado y el tipo', async () => {
-    const store = memoryStore([{ org: '999', rowid: '1', abogado_id: 3, tipo: 'cobranza' }]);
-    const f = withStore({ 'get /abogados/3': ANA, 'get /abogados/4': () => { throw Object.assign(new Error('Abogado no encontrado'), { status: 404 }); } }, store);
-    assert.deepEqual(await f.service.listElegibles(), []); // otra organización no se ve
-    await f.service.setElegible('3', { tipo: 'facturacion' });
-    await f.service.setElegible('3', { tipo: 'general' });
-    assert.deepEqual(await f.service.listElegibles(), [{ abogado_id: 3, tipo: 'general' }]);
-    await f.service.setElegible('3', { tipo: null });
-    assert.deepEqual(await f.service.listElegibles(), []);
-    assert.deepEqual(store.ops, ['insert', 'update', 'remove']);
-    await assert.rejects(f.service.setElegible('3', { tipo: 'socio' }), e => e.status === 400);
-    await assert.rejects(f.service.setElegible('3', {}), e => e.status === 400);
-    await assert.rejects(f.service.setElegible('3/x', { tipo: 'general' }), e => e.status === 400);
-    await assert.rejects(f.service.setElegible('4', { tipo: 'general' }), e => e.status === 404);
-    assert.equal(store.ops.length, 3);
-    assert.equal(writes(f.calls).length, 0); // nada se escribe en ReportesSandbox ni en Books
+test('abogados responsables: se leen de /abogados y se cambian con PATCH', async () => {
+    const f = fixture({
+        'get /abogados': [{ ...ANA, responsable: 'cobranza' }, { id: 5, responsable: null }, { id: 6, responsable: 'general' }],
+        'patch /abogados/3': { ...ANA, responsable: 'general' },
+        'patch /abogados/5': { id: 5, responsable: null },
+    });
+    assert.deepEqual(await f.service.listElegibles(), [{ abogado_id: 3, tipo: 'cobranza' }, { abogado_id: 6, tipo: 'general' }]);
+    assert.deepEqual(await f.service.setElegible('3', { tipo: 'general' }), { abogado_id: 3, tipo: 'general' });
+    await f.service.setElegible('5', { tipo: null });
+    assert.deepEqual(writes(f.calls).map(c => [c.path, c.opts.data]), [['/abogados/3', { responsable: 'general' }], ['/abogados/5', { responsable: null }]]);
+    for (const [id, body] of [['3', { tipo: 'socio' }], ['3', {}], ['3/x', { tipo: 'general' }]]) await assert.rejects(f.service.setElegible(id, body), e => e.status === 400);
+    assert.equal(writes(f.calls).length, 2);
+    // ReportesSandbox antiguo (sin el campo) o respuesta que no refleja el cambio → incierto
+    await assert.rejects(fixture({ 'get /abogados': [{ id: 3 }] }).service.listElegibles(), e => e.status === 502);
+    await assert.rejects(fixture({ 'patch /abogados/3': { id: 3, responsable: null } }).service.setElegible('3', { tipo: 'general' }), e => e.outcome_unknown === true);
 });
 
-test('asignar responsable: solo abogados marcados y para su rol; general puede ambos', async () => {
-    const store = memoryStore([
-        { org: '636939444', rowid: '1', abogado_id: 3, tipo: 'cobranza' },
-        { org: '636939444', rowid: '2', abogado_id: 5, tipo: 'general' },
-    ]);
-    const f = withStore({ 'get /abogados/3': ANA, 'get /abogados/5': { id: 5, nombre: 'Luis Socio', activo: 1 } }, store);
+test('asignar responsable: revisa la marca antes de escribir y manda abogado_id', async () => {
+    const f = fixture({
+        'get /abogados/3': { ...ANA, responsable: 'cobranza' }, 'get /abogados/9': { id: 9, responsable: null },
+        'get /abogados/5': { id: 5, nombre: 'Luis', activo: 1, responsable: 'general' }, 'get /abogados/6': { id: 6, activo: 0, status: 'inactivo', responsable: 'general' },
+        'post /responsables': () => (f.calls.at(-1).opts.data.rol === 'ambos'
+            ? { rol: 'ambos', asignaciones: [{ id: 40, ya_existia: true }, { id: 41, ya_existia: false }] } : { id: 39, rol: 'cobranza' }),
+    });
     await assert.rejects(f.service.createResponsable({ rol: 'cobranza', abogado_id: 9, proyecto_id: 8 }), e => e.status === 403);
     await assert.rejects(f.service.createResponsable({ rol: 'facturacion', abogado_id: 3, proyecto_id: 8 }), e => e.status === 403 && /cobranza/.test(e.message));
     await assert.rejects(f.service.createResponsable({ rol: 'ambos', abogado_id: 3, proyecto_id: 8 }), e => e.status === 403);
-    assert.equal(writes(f.calls).length, 0);
-    await f.service.createResponsable({ rol: 'cobranza', abogado_id: 3, proyecto_id: 8 });
-    assert.deepEqual(writes(f.calls).at(-1).opts.data, { rol: 'cobranza', nombre: 'Carolina Litter', proyecto_id: 8 });
-    const r = await f.service.createResponsable({ rol: 'ambos', abogado_id: 5, proyecto_id: 8 });
-    assert.equal(r.asignados.length, 2);
-    assert.deepEqual(writes(f.calls).slice(-2).map(c => c.opts.data.rol), ['facturacion', 'cobranza']);
-});
-
-test('ambos: la asignación que ya existía (409) cuenta como hecha; inactivo se rechaza', async () => {
-    const store = memoryStore([{ org: '636939444', rowid: '2', abogado_id: 5, tipo: 'general' }, { org: '636939444', rowid: '3', abogado_id: 6, tipo: 'general' }]);
-    const dup = () => { throw Object.assign(new Error('Ya existe'), { status: 409 }); };
-    let calls = 0;
-    const f = withStore({ 'get /abogados/5': { id: 5, nombre: 'Luis', activo: 1 }, 'get /abogados/6': { id: 6, nombre: 'Baja', activo: 0 },
-        'post /responsables': () => (calls++ === 0 ? dup() : { id: 41 }) }, store);
-    const r = await f.service.createResponsable({ rol: 'ambos', abogado_id: 5, proyecto_id: 8 });
-    assert.deepEqual(r.asignados, [{ id: 41 }]);
     await assert.rejects(f.service.createResponsable({ rol: 'ambos', abogado_id: 6, proyecto_id: 8 }), e => e.status === 422);
+    assert.equal(writes(f.calls).length, 0);
+    assert.deepEqual(await f.service.createResponsable({ rol: 'cobranza', abogado_id: 3, proyecto_id: 8, nombre: 'X' }), { id: 39, asignados: [{ id: 39, rol: 'cobranza' }] });
+    assert.deepEqual(writes(f.calls).at(-1).opts.data, { rol: 'cobranza', abogado_id: 3, proyecto_id: 8 });
+    const r = await f.service.createResponsable({ rol: 'ambos', abogado_id: 5, proyecto_id: 8 });
+    assert.deepEqual(r.asignados.map(a => a.id), [40, 41]);
 });
