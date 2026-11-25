@@ -17,6 +17,7 @@ const money = value => typeof value === 'number' && Number.isFinite(value) && va
 export const MONEDAS = ['MXN', 'USD', 'EUR'];
 export const TIPOS_COBRO = ['horas', 'fijo', 'iguala'];
 export const ROLES = ['facturacion', 'cobranza'];
+export const AGRUPACIONES = ['cliente', 'proyecto'];
 
 // Campos editables del proyecto. `cliente_id` no se edita (regla de la API) y `zoho_project_id`
 // (enlace con Books) se deja fuera de esta pantalla.
@@ -47,6 +48,11 @@ export function validateProyectoPatch(body) {
     if (body.zoho_tax_id !== undefined) {
         if (typeof body.zoho_tax_id !== 'string' || (body.zoho_tax_id !== '' && !/^\d{1,25}$/.test(body.zoho_tax_id))) throw new ConfigError('zoho_tax_id debe ser el ID del impuesto en Books, o vacío para usar el del cliente.');
         payload.zoho_tax_id = body.zoho_tax_id;
+    }
+    // Cómo se agrupa en Prebills: por cliente (todos sus proyectos juntos) o una Prebill por proyecto.
+    if (body.prebill_agrupacion !== undefined) {
+        if (!AGRUPACIONES.includes(body.prebill_agrupacion)) throw new ConfigError('prebill_agrupacion debe ser cliente o proyecto.');
+        payload.prebill_agrupacion = body.prebill_agrupacion;
     }
     if (!Object.keys(payload).length) throw new ConfigError('No hay cambios que guardar.');
     return payload;

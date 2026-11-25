@@ -104,3 +104,9 @@ test('asignar responsable: revisa la marca antes de escribir y manda abogado_id'
     const r = await f.service.createResponsable({ rol: 'ambos', abogado_id: 5, proyecto_id: 8 });
     assert.deepEqual(r.asignados.map(a => a.id), [40, 41]);
 });
+
+test('agrupación en Prebills: cliente o proyecto', async () => {
+    const { validateProyectoPatch } = await import('../services/ProyectoConfigService.js');
+    assert.deepEqual(validateProyectoPatch({ prebill_agrupacion: 'proyecto' }), { prebill_agrupacion: 'proyecto' });
+    assert.throws(() => validateProyectoPatch({ prebill_agrupacion: 'factura' }), /cliente o proyecto/);
+});
